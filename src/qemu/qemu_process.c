@@ -1715,6 +1715,57 @@ qemuProcessHandlePRManagerStatusChanged(qemuMonitorPtr mon ATTRIBUTE_UNUSED,
 }
 
 
+static int
+qemuProcessHandleRdmaGidStatusChanged(qemuMonitorPtr mon ATTRIBUTE_UNUSED,
+                                      virDomainObjPtr vm, const char *netdev,
+                                      bool gid_status, uint64_t subnet_prefix,
+                                      uint64_t interface_id, void *opaque)
+{
+    virQEMUDriverPtr driver = opaque;
+    struct qemuProcessEvent *processEvent = NULL;
+    qemuMonitorRdmaGidStatusChangedPrivatePtr rdmaGitStatusChangedPriv = NULL;
+    int ret = -1;
+
+    virObjectLock(vm);
+
+    VIR_DEBUG("netdev=%s,gid_status=%d,subnet_prefix=0x%lx,interface_id=0x%lx",
+              netdev, gid_status, subnet_prefix, interface_id);
+
+    if (VIR_ALLOC(rdmaGitStatusChangedPriv) < 0)
+        goto out_unlock;
+
+    if (VIR_STRDUP(rdmaGitStatusChangedPriv->netdev, netdev) < 0)
+        goto out_free;
+
+    rdmaGitStatusChangedPriv->gid_status = gid_status;
+    rdmaGitStatusChangedPriv->subnet_prefix = subnet_prefix;
+    rdmaGitStatusChangedPriv->interface_id = interface_id;
+
+    if (VIR_ALLOC(processEvent) < 0)
+        goto out_free;
+
+    processEvent->eventType = QEMU_PROCESS_EVENT_RDMA_GID_STATUS_CHANGED;
+    processEvent->vm = virObjectRef(vm);
+    processEvent->data = rdmaGitStatusChangedPriv;
+
+    if (virThreadPoolSendJob(driver->workerPool, 0, processEvent) < 0) {
+        qemuProcessEventFree(processEvent);
+        virObjectUnref(vm);
+        goto out_free;
+    }
+
+    ret = 0;
+    goto out_unlock;
+
+ out_free:
+    qemuMonitorEventRdmaGidStatusFree(rdmaGitStatusChangedPriv);
+
+ out_unlock:
+    virObjectUnlock(vm);
+    return ret;
+}
+
+
 static qemuMonitorCallbacks monitorCallbacks = {
     .eofNotify = qemuProcessHandleMonitorEOF,
     .errorNotify = qemuProcessHandleMonitorError,
@@ -1744,6 +1795,7 @@ static qemuMonitorCallbacks monitorCallbacks = {
     .domainBlockThreshold = qemuProcessHandleBlockThreshold,
     .domainDumpCompleted = qemuProcessHandleDumpCompleted,
     .domainPRManagerStatusChanged = qemuProcessHandlePRManagerStatusChanged,
+    .domainRdmaGidStatusChanged = qemuProcessHandleRdmaGidStatusChanged,
 };
 
 static void
